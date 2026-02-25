@@ -1,0 +1,316 @@
+# ---------- CORE: Open5GS 5GC + MongoDB ----------
+FROM baseimage:nova
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    TZ=Etc/UTC
+
+# ========= dependencies for Open5GS + MongoDB =========
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        python3-pip python3-setuptools python3-wheel ninja-build build-essential \
+        flex bison git cmake libsctp-dev lksctp-tools \
+        libgnutls28-dev libgcrypt-dev libssl-dev \
+        libidn11-dev libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev \
+        libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev \
+        libtalloc-dev meson \
+        libboost-system-dev libboost-program-options-dev libconfig++-dev \
+        python3 python3-numpy iperf3 \
+        iproute2 iputils-ping curl gnupg ca-certificates lsb-release; \
+    rm -rf /var/lib/apt/lists/*
+
+# install mongodb-mongosh command line
+RUN set -eux; \
+    curl -fsSL https://pgp.mongodb.com/server-6.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-6.0.gpg; \
+    echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" \
+      | tee /etc/apt/sources.list.d/mongodb-org-6.0.list; \
+    apt-get update; \
+    apt-get install -y mongodb-mongosh; \
+    rm -rf /var/lib/apt/lists/*
+
+# ========= install MongoDB 6.0 server =========
+RUN set -eux; \
+    curl -fsSL https://pgp.mongodb.com/server-6.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb.gpg; \
+    UBUNTU_CODENAME=$(lsb_release -cs 2>/dev/null || echo "focal"); \
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb.gpg ] https://repo.mongodb.org/apt/ubuntu $UBUNTU_CODENAME/mongodb-org/6.0 multiverse" \
+        > /etc/apt/sources.list.d/mongodb-org-6.0.list; \
+    apt-get update; \
+    apt-get install -y mongodb-org; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /data/db
+
+# ========= build Open5GS =========
+RUN set -eux; \
+    git clone https://github.com/open5gs/open5gs.git /opt/open5gs; \
+    cd /opt/open5gs; \
+    meson build --prefix=`pwd`/install -Dbuildtype=release; \
+    ninja -C build; \
+    cd build && meson test -v || true; \
+    ninja install; \
+    ln -sf /opt/open5gs/install/bin/* /usr/local/bin/; \
+    ln -sf /opt/open5gs/install/etc/open5gs /usr/local/etc/open5gs; \
+    mkdir -p /var/log/open5gs /opt/open5gs/install/var/log/open5gs
+
+# ========= Open5GS NF configs (same as your current ones) =========
+RUN mkdir -p /opt/open5gs/install/etc/open5gs
+
+# NRF
+RUN cat > /opt/open5gs/install/etc/open5gs/nrf.yaml <<'EOF'
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/nrf.log
+global:
+  max:
+    ue: 1024
+nrf:
+  serving:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+  sbi:
+    server:
+      - address: 127.0.0.10
+        port: 7777
+EOF
+
+# UDR
+RUN cat > /opt/open5gs/install/etc/open5gs/udr.yaml <<'EOF'
+db_uri: mongodb://localhost/open5gs
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/udr.log
+global:
+  max:
+    ue: 1024
+udr:
+  sbi:
+    server:
+      - address: 127.0.0.20
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+EOF
+
+# PCF
+RUN cat > /opt/open5gs/install/etc/open5gs/pcf.yaml <<'EOF'
+db_uri: mongodb://localhost/open5gs
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/pcf.log
+global:
+  max:
+    ue: 1024
+pcf:
+  sbi:
+    server:
+      - address: 127.0.0.13
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+  metrics:
+    server:
+      - address: 127.0.0.13
+        port: 9090
+EOF
+
+# AUSF
+RUN cat > /opt/open5gs/install/etc/open5gs/ausf.yaml <<'EOF'
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/ausf.log
+global:
+  max:
+    ue: 1024
+ausf:
+  sbi:
+    server:
+      - address: 127.0.0.11
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+EOF
+
+# UDM
+RUN cat > /opt/open5gs/install/etc/open5gs/udm.yaml <<'EOF'
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/udm.log
+global:
+  max:
+    ue: 1024
+udm:
+  hnet:
+    - id: 1
+      scheme: 1
+      key: /opt/open5gs/install/etc/open5gs/hnet/curve25519-1.key
+    - id: 2
+      scheme: 2
+      key: /opt/open5gs/install/etc/open5gs/hnet/secp256r1-2.key
+    - id: 3
+      scheme: 1
+      key: /opt/open5gs/install/etc/open5gs/hnet/curve25519-3.key
+    - id: 4
+      scheme: 2
+      key: /opt/open5gs/install/etc/open5gs/hnet/secp256r1-4.key
+    - id: 5
+      scheme: 1
+      key: /opt/open5gs/install/etc/open5gs/hnet/curve25519-5.key
+    - id: 6
+      scheme: 2
+      key: /opt/open5gs/install/etc/open5gs/hnet/secp256r1-6.key
+  sbi:
+    server:
+      - address: 127.0.0.12
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+EOF
+
+# AMF
+RUN cat > /opt/open5gs/install/etc/open5gs/amf.yaml <<'EOF'
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/amf.log
+global:
+  max:
+    ue: 1024
+amf:
+  sbi:
+    server:
+      - address: 127.0.0.5
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+  ngap:
+    server:
+      - address: 9.27.27.10
+        port: 38412
+  metrics:
+    server:
+      - address: 127.0.0.5
+        port: 9090
+  guami:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      amf_id:
+        region: 2
+        set: 1
+  tai:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      tac: 7
+  plmn_support:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      s_nssai:
+        - sst: 1
+  security:
+    integrity_order : [ NIA2, NIA1, NIA0 ]
+    ciphering_order : [ NEA0, NEA1, NEA2 ]
+  network_name:
+    full: Open5GS
+    short: Next
+  amf_name: open5gs-amf0
+  time:
+    t3512:
+      value: 540
+EOF
+
+# SMF
+RUN cat > /opt/open5gs/install/etc/open5gs/smf.yaml <<'EOF'
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/smf.log
+global:
+  max:
+    ue: 1024
+smf:
+  sbi:
+    server:
+      - address: 127.0.0.4
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+  pfcp:
+    server:
+      - address: 127.0.0.4
+    client:
+      upf:
+        - address: 127.0.0.7
+  gtpc:
+    server:
+      - address: 127.0.0.4
+  gtpu:
+    server:
+      - address: 127.0.0.4
+  metrics:
+    server:
+      - address: 127.0.0.4
+        port: 9090
+  session:
+    - subnet: 10.45.0.0/16
+      gateway: 10.45.0.1
+      dnn: internet
+      dev: ogstun
+    - subnet: 2001:db8:cafe::/48
+      gateway: 2001:db8:cafe::1
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
+    - 2001:4860:4860::8888
+    - 2001:4860:4860::8844
+  mtu: 1400
+  freeDiameter: /opt/open5gs/install/etc/freeDiameter/smf.conf
+EOF
+
+# UPF
+RUN cat > /opt/open5gs/install/etc/open5gs/upf.yaml <<'EOF'
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/upf.log
+global:
+  max:
+    ue: 1024
+upf:
+  pfcp:
+    server:
+      - address: 127.0.0.7
+  gtpu:
+    server:
+      - address: 9.27.27.10
+  session:
+    - subnet: 10.45.0.0/16
+      gateway: 10.45.0.1
+      dnn: internet
+      dev: ogstun
+    - subnet: 2001:db8:cafe::/48
+      gateway: 2001:db8:cafe::1
+  metrics:
+    server:
+      - address: 127.0.0.7
+        port: 9090
+EOF
+
+# scripts
+COPY mongodb.sh /usr/local/bin/mongodb.sh
+RUN chmod +x /usr/local/bin/mongodb.sh
+
+COPY open5gs.sh /usr/local/bin/open5gs.sh
+RUN chmod +x /usr/local/bin/open5gs.sh
+
+RUN mkdir -p /tmp /var/log/open5gs
+ENV PATH="/opt/open5gs/install/bin:$PATH"
+
+# NOTE: keep your existing start command if starlab_node provides it
+CMD ["/usr/local/bin/start-gs"]

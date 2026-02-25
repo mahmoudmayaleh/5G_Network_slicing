@@ -1,0 +1,2 @@
+# This file ensures the logs/open5gs directory is tracked by git
+# Log files themselves are excluded via .gitignore

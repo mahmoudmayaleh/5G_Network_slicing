@@ -1,0 +1,24 @@
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/upf.log
+
+upf:
+  pfcp:
+    server:
+      - address: 127.0.0.7
+  gtpu:
+    server:
+      - address: 192.168.50.2
+  session:
+    - subnet: 10.45.1.0/24
+      gateway: 10.45.1.1
+      dnn: internet1
+      dev: ogstun
+    - subnet: 10.45.2.0/24
+      gateway: 10.45.2.1
+      dnn: internet2
+      dev: ogstun
+    - subnet: 10.45.3.0/24
+      gateway: 10.45.3.1
+      dnn: internet3
+      dev: ogstun

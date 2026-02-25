@@ -1,0 +1,41 @@
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/smf.log
+
+smf:
+  sbi:
+    server:
+      - address: 127.0.0.4
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+  pfcp:
+    server:
+      - address: 127.0.0.4
+    client:
+      upf:
+        - address: 127.0.0.7
+  gtpc:
+    server:
+      - address: 127.0.0.4
+  gtpu:
+    server:
+      - address: 127.0.0.4
+  session:
+    - subnet: 10.45.1.0/24
+      gateway: 10.45.1.1
+      dnn: internet1
+      dev: ogstun
+    - subnet: 10.45.2.0/24
+      gateway: 10.45.2.1
+      dnn: internet2
+      dev: ogstun
+    - subnet: 10.45.3.0/24
+      gateway: 10.45.3.1
+      dnn: internet3
+      dev: ogstun
+
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4

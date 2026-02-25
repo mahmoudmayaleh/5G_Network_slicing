@@ -1,0 +1,50 @@
+slicing:
+  - sst: 1
+    sd: 000000
+
+  - sst: 2
+    sd: 000000
+
+  - sst: 3
+    sd: 000000
+
+amf:
+  addr: 192.168.50.2
+  bind_addr: 192.168.50.3
+  port: 38412
+
+ru_sdr:
+  device_driver: zmq
+  device_args: tx_port=tcp://0.0.0.0:2000,rx_port=tcp://192.168.60.6:2001,id=gnb,base_srate=23.04e6
+  srate: 23.04
+  tx_gain: 75
+  rx_gain: 75
+
+cell_cfg:
+  dl_arfcn: 368500
+  band: 3
+  channel_bandwidth_MHz: 20
+  common_scs: 15
+  plmn: "00101"
+  tac: 7
+  pdcch:
+    dedicated:
+      ss2_type: common
+      dci_format_0_1_and_1_1: false
+    common:
+      ss0_index: 0
+      coreset0_index: 12
+  prach:
+    prach_config_index: 1
+    total_nof_ra_preambles: 64
+  pdsch:
+    mcs_table: qam64
+  pusch:
+    mcs_table: qam64
+
+log:
+  filename: /tmp/gnb.log
+  all_level: info
+
+pcap:
+  mac_enable: enable

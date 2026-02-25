@@ -1,0 +1,462 @@
+# ---------- Ground Station: Open5GS 5GC + MongoDB + srsRAN_4G (UE only) ----------
+FROM baseimage:nova
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    TZ=Etc/UTC
+
+# ========= dependence =========
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        python3-pip python3-setuptools python3-wheel ninja-build build-essential \
+        flex bison git cmake libsctp-dev lksctp-tools \
+        libgnutls28-dev libgcrypt-dev libssl-dev \
+        libidn11-dev libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev \
+        libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev \
+        libtalloc-dev meson \
+        libboost-system-dev libboost-program-options-dev libconfig++-dev \
+        libfftw3-dev libmbedtls-dev libzmq3-dev libyaml-cpp-dev \
+        python3 python3-numpy iperf3\
+        iproute2 iputils-ping curl gnupg ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+
+# install mongodb-mongosh command line
+RUN curl -fsSL https://pgp.mongodb.com/server-6.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-6.0.gpg
+RUN echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" \
+    | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+RUN apt-get update && apt-get install -y mongodb-mongosh
+
+# update cmake
+RUN set -eux; \
+    apt-get update && apt-get install -y wget; \
+    wget https://cmake.org/files/v3.18/cmake-3.18.6-Linux-x86_64.tar.gz; \
+    tar -zxvf cmake-3.18.6-Linux-x86_64.tar.gz -C /opt; \
+    ln -s /opt/cmake-3.18.6-Linux-x86_64/bin/* /usr/local/bin/; \
+    ln -s /opt/cmake-3.18.6-Linux-x86_64/share/* /usr/local/share/ || true; \
+    rm -rf cmake-3.18.6-Linux-x86_64*; \
+    cmake --version
+
+
+# ========= install MongoDB 6.0 server (stable) =========
+RUN set -eux; \
+    curl -fsSL https://pgp.mongodb.com/server-6.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb.gpg; \
+    # detect Ubuntu version
+    UBUNTU_CODENAME=$(lsb_release -cs 2>/dev/null || echo "focal"); \
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb.gpg ] https://repo.mongodb.org/apt/ubuntu $UBUNTU_CODENAME/mongodb-org/6.0 multiverse" \
+        > /etc/apt/sources.list.d/mongodb-org-6.0.list; \
+    apt-get update; \
+    apt-get install -y mongodb-org; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /data/db
+
+# ========= official install Open5GS (5GC) =========
+RUN set -eux; \
+    git clone https://github.com/open5gs/open5gs.git /opt/open5gs; \
+    cd /opt/open5gs; \
+    meson build --prefix=`pwd`/install -Dbuildtype=release; \
+    ninja -C build; \
+    cd build && meson test -v || true; \
+    ninja install; \
+    ln -sf /opt/open5gs/install/bin/* /usr/local/bin/; \
+    ln -sf /opt/open5gs/install/etc/open5gs /usr/local/etc/open5gs; \
+    mkdir -p /var/log/open5gs
+
+# ========= install srsRAN_4G (UE only) =========
+RUN set -eux; \
+    git clone https://github.com/srsRAN/srsRAN_4G.git /opt/srsRAN_4G; \
+    cd /opt/srsRAN_4G; \
+    mkdir build && cd build; \
+    cmake ../ \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_ZEROMQ=ON \
+        -DENABLE_UHD=OFF; \
+    make -j"$(nproc)"; \
+    make test || true; \
+    make install
+
+# ========= create ue file =========
+RUN mkdir -p /opt/srsRAN_4G/build/srsue/src && \
+    echo "[rf]" > /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "freq_offset = 0" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "tx_gain = 50" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "rx_gain = 40" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "srate = 23.04e6" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "nof_antennas = 1" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "device_name = zmq" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "device_args = tx_port=tcp://9.1.7.60:2001,rx_port=tcp://9.1.7.50:2000,base_srate=23.04e6" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[rat.eutra]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "dl_earfcn = 2850" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "nof_carriers = 0" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[rat.nr]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "bands = 3" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "nof_carriers = 1" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "max_nof_prb = 106" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "nof_prb = 106" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[pcap]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "enable = none" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "mac_filename = /tmp/ue_mac.pcap" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "mac_nr_filename = /tmp/ue_mac_nr.pcap" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "nas_filename = /tmp/ue_nas.pcap" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[log]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "all_level = info" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "phy_lib_level = none" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "all_hex_limit = 32" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "filename = /tmp/ue.log" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "file_max_size = -1" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[usim]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "mode = soft" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "algo = milenage" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "opc  = 63BFA50EE6523365FF14C1F45F88737D" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "k    = 00112233445566778899aabbccddeeff" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "imsi = 001010123456780" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "imei = 353490069873319" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[rrc]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "release = 15" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "ue_category = 4" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[nas]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "apn = internet" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "apn_protocol = ipv4" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[gw]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "netns = ue1" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "ip_devname = tun_srsue" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "ip_netmask = 255.255.255.0" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "[gui]" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf && \
+    echo "enable = false" >> /opt/srsRAN_4G/build/srsue/src/ue_rf.conf
+
+
+#### 5GC NF config ###
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/nrf.yaml <<EOF
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/nrf.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+nrf:
+  serving:
+    # 5G roaming requires PLMN in NRF
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+  sbi:
+    server:
+      - address: 127.0.0.10
+        port: 7777
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/udr.yaml <<'EOF'
+db_uri: mongodb://localhost/open5gs
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/udr.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+udr:
+  sbi:
+    server:
+      - address: 127.0.0.20
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/pcf.yaml <<EOF
+db_uri: mongodb://localhost/open5gs
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/pcf.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+pcf:
+  sbi:
+    server:
+      - address: 127.0.0.13
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+          #      scp:
+          #        - uri: http://127.0.0.200:7777
+  metrics:
+    server:
+      - address: 127.0.0.13
+        port: 9090
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/ausf.yaml <<EOF
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/ausf.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+ausf:
+  sbi:
+    server:
+      - address: 127.0.0.11
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+          #      scp:
+          #        - uri: http://127.0.0.200:7777
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/udm.yaml <<EOF
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/udm.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+udm:
+  hnet:
+    - id: 1
+      scheme: 1
+      key: /opt/open5gs/install/etc/open5gs/hnet/curve25519-1.key
+    - id: 2
+      scheme: 2
+      key: /opt/open5gs/install/etc/open5gs/hnet/secp256r1-2.key
+    - id: 3
+      scheme: 1
+      key: /opt/open5gs/install/etc/open5gs/hnet/curve25519-3.key
+    - id: 4
+      scheme: 2
+      key: /opt/open5gs/install/etc/open5gs/hnet/secp256r1-4.key
+    - id: 5
+      scheme: 1
+      key: /opt/open5gs/install/etc/open5gs/hnet/curve25519-5.key
+    - id: 6
+      scheme: 2
+      key: /opt/open5gs/install/etc/open5gs/hnet/secp256r1-6.key
+  sbi:
+    server:
+      - address: 127.0.0.12
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+          #      scp:
+          #        - uri: http://127.0.0.200:7777
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/amf.yaml <<EOF
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/amf.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+amf:
+  sbi:
+    server:
+      - address: 127.0.0.5
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+          #      scp:
+          #        - uri: http://127.0.0.200:7777
+  ngap:
+    server:
+      - address: 9.27.27.10
+        port: 38412
+  metrics:
+    server:
+      - address: 127.0.0.5
+        port: 9090
+  guami:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      amf_id:
+        region: 2
+        set: 1
+  tai:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      tac: 7
+  plmn_support:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      s_nssai:
+        - sst: 1
+  security:
+    integrity_order : [ NIA2, NIA1, NIA0 ]
+    ciphering_order : [ NEA0, NEA1, NEA2 ]
+  network_name:
+    full: Open5GS
+    short: Next
+  amf_name: open5gs-amf0
+  time:
+#    t3502:
+#      value: 720   # 12 minutes * 60 = 720 seconds
+    t3512:
+      value: 540    # 9 minutes * 60 = 540 seconds
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/smf.yaml <<EOF
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/smf.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+smf:
+  sbi:
+    server:
+      - address: 127.0.0.4
+        port: 7777
+    client:
+      nrf:
+        - uri: http://127.0.0.10:7777
+          #      scp:
+          #        - uri: http://127.0.0.200:7777
+  pfcp:
+    server:
+      - address: 127.0.0.4
+    client:
+      upf:
+        - address: 127.0.0.7
+  gtpc:
+    server:
+      - address: 127.0.0.4
+  gtpu:
+    server:
+      - address: 127.0.0.4
+  metrics:
+    server:
+      - address: 127.0.0.4
+        port: 9090
+  session:
+    - subnet: 10.45.0.0/16
+      gateway: 10.45.0.1
+      dnn: internet
+      dev: ogstun
+    - subnet: 2001:db8:cafe::/48
+      gateway: 2001:db8:cafe::1
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
+    - 2001:4860:4860::8888
+    - 2001:4860:4860::8844
+  mtu: 1400
+#  p-cscf:
+#    - 127.0.0.1
+#    - ::1
+#  ctf:
+#    enabled: auto   # auto(default)|yes|no
+  freeDiameter: /opt/open5gs/install/etc/freeDiameter/smf.conf
+EOF
+
+
+RUN mkdir -p /opt/open5gs/install/etc/open5gs && \
+    cat > /opt/open5gs/install/etc/open5gs/upf.yaml <<EOF
+logger:
+  file:
+    path: /opt/open5gs/install/var/log/open5gs/upf.log
+#  level: info   # fatal|error|warn|info(default)|debug|trace
+
+global:
+  max:
+    ue: 1024  # The number of UE can be increased depending on memory size.
+#    peer: 64
+
+upf:
+  pfcp:
+    server:
+      - address: 127.0.0.7
+    client:
+#      smf:     #  UPF PFCP Client try to associate SMF PFCP Server
+#        - address: 127.0.0.4
+  gtpu:
+    server:
+      - address: 9.27.27.10
+  session:
+    - subnet: 10.45.0.0/16
+      gateway: 10.45.0.1
+      dnn: internet
+      dev: ogstun
+    - subnet: 2001:db8:cafe::/48
+      gateway: 2001:db8:cafe::1
+  metrics:
+    server:
+      - address: 127.0.0.7
+        port: 9090
+EOF
+
+## copy mongodb.sh
+COPY mongodb.sh /usr/local/bin/mongodb.sh
+RUN chmod +x /usr/local/bin/mongodb.sh
+
+COPY open5gs.sh /usr/local/bin/open5gs.sh
+RUN chmod +x /usr/local/bin/open5gs.sh
+# RUN echo "ip route add default via 172.17.0.1" >> /docker-entrypoint.sh
+# ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# ========= create library =========
+RUN mkdir -p /tmp /var/log/open5gs
+
+# ========= environment variable =========
+ENV PATH="/opt/open5gs/install/bin:$PATH"
+
+CMD ["/usr/local/bin/start-gs"]

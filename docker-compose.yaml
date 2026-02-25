@@ -1,0 +1,145 @@
+services:
+  core:
+    image: 5gcimg:nova
+    container_name: 5GCORECONT-2
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./configs/open5gs:/opt/open5gs/install/etc/open5gs:ro
+      - ./logs/open5gs:/opt/open5gs/install/var/log/open5gs:rw
+      - ./scripts/core-start.sh:/usr/local/bin/core-start.sh:ro
+    networks:
+      core_net:
+        ipv4_address: 192.168.50.2
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+
+  broker:
+    image: gnu:nova
+    container_name: GNUCONT-2
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    volumes:
+      - ./flowgraphs:/app
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      QT_QPA_PLATFORM: offscreen
+      DISPLAY: ""
+    networks:
+      ran_net:
+        ipv4_address: 192.168.60.6
+    command: ["sh", "-c", "sleep infinity"]
+    #restart: unless-stopped
+
+  gnb:
+    image: gnb:nova
+    container_name: GNBCONT-2
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./configs/srsran/gnb.yaml:/etc/srsran/gnb.yaml:ro
+      - ./scripts/gnb-start.sh:/usr/local/bin/gnb-start.sh:ro
+      - ./logs/srsran:/tmp:rw
+    networks:
+      core_net:
+        ipv4_address: 192.168.50.3
+      ran_net:
+        ipv4_address: 192.168.60.3
+    depends_on:
+      - core
+      - broker
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+
+  ue1:
+    image: ue:nova
+    container_name: UECONT-2
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    environment:
+      UE_CONF: /etc/srsran/ue.conf
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./configs/srsran/ue1.conf:/etc/srsran/ue.conf:ro
+      - ./scripts/ue-start.sh:/usr/local/bin/ue-start.sh:ro
+      - ./logs/srsran:/tmp:rw
+    networks:
+      ran_net:
+        ipv4_address: 192.168.60.2
+    depends_on:
+      - gnb
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+
+  ue2:
+    image: ue:nova
+    container_name: UE2CONT-2
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    environment:
+      UE_CONF: /etc/srsran/ue.conf
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./configs/srsran/ue2.conf:/etc/srsran/ue.conf:ro
+      - ./scripts/ue-start.sh:/usr/local/bin/ue-start.sh:ro
+      - ./logs/srsran:/tmp:rw
+    networks:
+      ran_net:
+        ipv4_address: 192.168.60.4
+    depends_on:
+      - gnb
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+
+  ue3:
+    image: ue:nova
+    container_name: UE3CONT-2
+    privileged: true
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    environment:
+      UE_CONF: /etc/srsran/ue.conf
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./configs/srsran/ue3.conf:/etc/srsran/ue.conf:ro
+      - ./scripts/ue-start.sh:/usr/local/bin/ue-start.sh:ro
+      - ./logs/srsran:/tmp:rw
+    networks:
+      ran_net:
+        ipv4_address: 192.168.60.5
+    depends_on:
+      - gnb
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+
+networks:
+  core_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.50.0/24
+
+  ran_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.60.0/24
