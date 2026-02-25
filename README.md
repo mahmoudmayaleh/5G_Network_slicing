@@ -248,7 +248,7 @@ Each should show different IP addresses from different subnets (10.45.1.x, 10.45
 docker exec -it UECONT-2 ping -I tun_srsue -c 4 google.com
 ```
 
-## 🛠️ Configuration
+## Configuration
 
 ### Modifying Network Slices
 
